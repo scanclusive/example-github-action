@@ -1,0 +1,73 @@
+name: Accessibility Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Optional: run a scheduled scan every Monday at 08:00 UTC
+  schedule:
+    - cron: "0 8 * * 1"
+
+# Required for the PR comment step below.
+# Without this, GitHub will throw a 403 when trying to post the comment.
+permissions:
+  pull-requests: write
+
+jobs:
+  accessibility:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run ScanClusive Accessibility Scan
+        uses: scanclusive/scanclusive-action@v1
+        id: scan
+        with:
+          api-key: ${{ secrets.SCANCLUSIVE_API_KEY }}
+          project-id: ${{ vars.SCANCLUSIVE_PROJECT_ID }}
+          # Fail the pipeline if compliance drops below 90%
+          threshold: 90
+          # Fail the pipeline if any critical violations are found
+          fail-on-violations: true
+
+      # Saves results as a downloadable artifact in the Actions tab.
+      # Useful for tracking compliance trends over time.
+      - name: Upload scan results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scanclusive-results-${{ github.sha }}
+          path: scanclusive-results.json
+          retention-days: 90
+
+      # Posts a summary comment directly on the PR.
+      # Only runs when the workflow is triggered by a pull_request event.
+      # Remove this step if you don't want PR comments.
+      - name: Comment on PR
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const score      = '${{ steps.scan.outputs.compliance-score }}';
+            const violations = '${{ steps.scan.outputs.total-violations }}';
+            const critical   = '${{ steps.scan.outputs.critical-count }}';
+            const reportUrl  = '${{ steps.scan.outputs.report-url }}';
+            const status     = '${{ steps.scan.outputs.status }}';
+            const emoji      = parseInt(score) >= 90 ? '✅' : parseInt(score) >= 70 ? '⚠️' : '❌';
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: [
+                `## ${emoji} ScanClusive Accessibility Report`,
+                ``,
+                `| Metric | Value |`,
+                `|--------|-------|`,
+                `| Compliance Score | **${score}%** |`,
+                `| Total Violations | ${violations} |`,
+                `| Critical | ${critical} |`,
+                `| Status | ${status} |`,
+                ``,
+                `[View Full Report](${reportUrl})`,
+              ].join('\n')
+            });
